@@ -60,6 +60,7 @@ import org.apache.commons.lang.StringUtils;
 
 import com.bazaarvoice.jolt.Transform;
 import com.bazaarvoice.jolt.JsonUtils;
+import com.bazaarvoice.jolt.Chainr;
 
 @EventDriven
 @SideEffectFree
@@ -70,18 +71,9 @@ import com.bazaarvoice.jolt.JsonUtils;
 @CapabilityDescription("Applies a list of Jolt specifications to the flowfile JSON payload. A new FlowFile is created "
         + "with transformed content and is routed to the 'success' relationship. If the JSON transform "
         + "fails, the original FlowFile is routed to the 'failure' relationship.")
-public class Jolt24TransformJSON extends AbstractProcessor {
+public class JoltTransformJSONChainr extends AbstractProcessor {
 
     public static final AllowableValue CHAINR = new AllowableValue("jolt-transform-chain", "Chain", "Execute list of Jolt transformations.");
-
-    public static final PropertyDescriptor JOLT_TRANSFORM = new PropertyDescriptor.Builder()
-            .name("jolt-transform")
-            .displayName("Jolt Transformation DSL")
-            .description("Specifies the Jolt Transformation that should be used with the provided specification.")
-            .required(true)
-            .allowableValues(CHAINR)
-            .defaultValue(CHAINR.getValue())
-            .build();
 
     public static final PropertyDescriptor JOLT_SPEC = new PropertyDescriptor.Builder()
             .name("jolt-spec")
@@ -103,14 +95,12 @@ public class Jolt24TransformJSON extends AbstractProcessor {
 
     private final static List<PropertyDescriptor> properties;
     private final static Set<Relationship> relationships;
-    private volatile Transform transform;
-    private volatile ClassLoader customClassLoader;
+    private volatile Chainr transform;
     private final static String DEFAULT_CHARSET = "UTF-8";
 
     static{
 
         final List<PropertyDescriptor> _properties = new ArrayList<>();
-        _properties.add(JOLT_TRANSFORM);
         _properties.add(JOLT_SPEC);
         properties = Collections.unmodifiableList(_properties);
 
@@ -151,13 +141,9 @@ public class Jolt24TransformJSON extends AbstractProcessor {
         });
 
         final String jsonString;
-        final ClassLoader originalContextClassLoader = Thread.currentThread().getContextClassLoader();
 
         try {
 
-            if(customClassLoader != null) {
-                Thread.currentThread().setContextClassLoader(customClassLoader);
-            }
 
             final ByteArrayInputStream bais = new ByteArrayInputStream(originalContent);
             final Object inputJson = JsonUtils.jsonToObject(bais);
@@ -170,9 +156,6 @@ public class Jolt24TransformJSON extends AbstractProcessor {
             return;
 
         }finally {
-            if(customClassLoader != null && originalContextClassLoader != null) {
-                Thread.currentThread().setContextClassLoader(originalContextClassLoader);
-            }
         }
 
         FlowFile transformed = session.write(original, new OutputStreamCallback() {
@@ -182,10 +165,9 @@ public class Jolt24TransformJSON extends AbstractProcessor {
             }
         });
 
-        final String transformType = context.getProperty(JOLT_TRANSFORM).getValue();
         transformed = session.putAttribute(transformed, CoreAttributes.MIME_TYPE.key(),"application/json");
         session.transfer(transformed, REL_SUCCESS);
-        session.getProvenanceReporter().modifyContent(transformed,"Modified With " + transformType ,stopWatch.getElapsed(TimeUnit.MILLISECONDS));
+        session.getProvenanceReporter().modifyContent(transformed,"Modified With Chainr", stopWatch.getElapsed(TimeUnit.MILLISECONDS));
         logger.info("Transformed {}", new Object[]{original});
 
     }
@@ -195,10 +177,8 @@ public class Jolt24TransformJSON extends AbstractProcessor {
 
         try{
             Object specJson = null;
-
-            if(context.getProperty(JOLT_SPEC).isSet()){
-                specJson = JsonUtils.jsonToObject(context.getProperty(JOLT_SPEC).getValue(), DEFAULT_CHARSET);
-            }
+            specJson = JsonUtils.jsonToObject(context.getProperty(JOLT_SPEC).getValue(), DEFAULT_CHARSET);
+            transform = Chainr.fromSpec(specJson);
 
         } catch (Exception ex){
             getLogger().error("Unable to setup processor",ex);
